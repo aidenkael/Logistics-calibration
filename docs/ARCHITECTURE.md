@@ -1,38 +1,22 @@
 # Architecture
 
-## 设计原则
+本独立项目只有三项运行时职责：追加 Calibration Record、按 Governance V1 评估成熟度、维护开发者状态页。它不是物流估算器，也不包含正式规则发布工具。
 
-**软件是唯一生产计算引擎；Agent 是离线校准、分析和规则编译工具。**
-
-## 正式闭环
-
-```
-Calibration Feedback Export V2
-  → Agent candidate
-  → Validator (软件)
-  → Offline Replay V1 (软件)
-  → Promotion V1 (软件)
-  → validated package
-  → Formal Runtime Bundle V1 (软件)
-  → 软件导入 inactive
-  → 用户手动启用
+```text
+第一次 AI 估算 + 用户校准
+  → Calibration Record
+  → 成熟度判断与用户确认
+  → 待发布状态
+  → 外部 Profit-Accounting 正式流程
+  → 确认激活后才可标记 SOFTWARE_ACTIVE
 ```
 
-## 本工作台不做的事
+| 路径 | 职责 |
+|---|---|
+| `data/` | 当前只追加的校准记录 |
+| `schemas/` | Calibration Record schema |
+| `tools/` | 录入与测试 |
+| `CALIBRATION_STATUS.md` | 当前 Clean Rules 和成熟度概览 |
+| `archive/legacy/` | 历史档案，默认不读取 |
 
-- 不维护生产 estimator
-- 不决定正式包装尺寸
-- 不宣布规则 validated
-- 不直接修改软件 builtin registry
-- 不修改 SQLite active calibration
-- 不激活规则包
-
-## 目录职责
-
-| 目录 | 职责 |
-|------|------|
-| `config/` | 本机路径配置 |
-| `inbox/` | 用户导入的待分析资料 |
-| `work/` | Agent 临时工作区 |
-| `archive/legacy/` | 旧项目历史档案（默认不读取） |
-| `docs/` | 架构和工作流文档 |
+正式软件验证、Replay、Promotion、导入与激活发生在外部软件中；它们不是本仓库的自动化任务。

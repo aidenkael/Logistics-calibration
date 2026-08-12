@@ -1,99 +1,63 @@
-# Calibration Rules（校准规则 V1）
+# Calibration Governance V1
 
-精简校准规则。具体操作见 [SKILL.md](../SKILL.md) 与 `tools/calibration_intake.py`。
+## 1. 输入和职责边界
 
-## 1. 角色与边界
+每条日常校准只比较两项：软件第一次 AI 估算，以及用户在 Profit-Accounting 中得到的用户校准结果。局部重估、直接修改和其他软件内部操作都属于用户校准结果。
 
-- Profit-Accounting 是唯一生产计算引擎；本工作台只负责记录、分析、归类、生成 candidate。
-- Agent 不实现、不复制第二套物流计算器（estimator / calculator / packing engine / 仲裁器）。
-- Agent 不修改正式物流公式，不修改 Profit-Accounting-2.6.1、keyword_tool、product_collector。
+Agent 不复制局部重估、不运行第二套物流估算、不还原中间操作、不修改 Profit-Accounting Prompt，也不成为生产估算器。
 
-## 2. 事实优先
+## 2. 物理机制标签
 
-任何校准必须区分四类信息：已知事实、用户反馈、软件原估算、Agent 推断。
-
-- 禁止把推断保存成事实。
-- 不知道的值一律写 `UNKNOWN`（数字写 `null`），不得为字段完整而猜测。
-
-## 3. 实际费用不能反推唯一包装
-
-只有实际头程费用时，可以判断：当前估算明显偏高/偏低、可能存在计费重方向问题、可作误差样本。
-
-不能断言：实际包装长宽高、实际包装方式、实际重量、某个轴应压缩多少。
-
-## 4. 单样本不生成通用规则
-
-一个商品只能形成：calibration record、anomaly、possible pattern、exact-case candidate。
-
-默认至少多个独立商品出现相同误差模式，才进入规则归纳。
-
-## 5. 旧档案默认关闭
-
-`archive/legacy/` 默认不读取；CAL77 不是日常校准默认上下文。
-
-除非：用户明确要求参考历史、当前问题与历史案例高度相关、或新规则需要额外回归参考。
-
-## 6. 稳定事实直接复用
-
-已确认并保存的货代、物流公式、固定费用、schema、业务规则直接读取，不重复解释和重新推导。
-
-## 7. 最小必要信息
-
-普通单条校准只完成：读取 → 对比 → 分类 → 保存。
-
-只有出现严重异常、数据冲突、新误差模式、可能形成规则时，才进一步分析。
-
-## 8. 证据等级（仅四级）
-
-- **A**：实际包装尺寸/包装重量等直接测量资料充分。
-- **B**：有可靠物流事实或计费事实，但包装资料不完整。
-- **C**：主要只有实际物流费用或间接证据。
-- **D**：主要来自人工判断或低确定性信息。
-
-## 9. 误差类型（仅以下分类）
+`analysis.physical_mechanism` 仅用于聚合独立商品与识别系统性误差：
 
 ```text
-DIMENSION_HIGH
-DIMENSION_LOW
-WEIGHT_HIGH
-WEIGHT_LOW
-PACKAGING_ASSUMPTION
-FOLDING_COMPRESSION
-STRUCTURE_MISREAD
-QUANTITY_MISMATCH
-SKU_MISMATCH
-FREIGHT_MISMATCH
-FORWARDER_MISMATCH
-DATA_CONFLICT
+FULL_FLAT_FOLD
+STRONG_COMPRESSION
+MODERATE_COMPRESSION
+SHAPE_RETAINED
 UNKNOWN
 ```
 
-新案例不属于以上类别时，先使用 `UNKNOWN + user_note`；只有重复出现后才考虑扩展 taxonomy。
+无法可靠判断时必须使用 `UNKNOWN`。`packing_action` 等细节可以作为辅助证据，但不是强制规则形成维度，也不得扩展出大量主分类。
 
-## 10. 规则升级门槛
+## 3. 样本与成熟度
+
+同一规律必须同时满足：同一主要物理/包装机制、同一种误差原因、相同且稳定的误差方向，以及真正独立的商品。颜色、尺寸变化或不同链接的同款商品不得重复计入独立样本；无法确认独立性时不得计数。
+
+| 独立样本 | 处理 |
+|---|---|
+| 1–2 | 只记录。 |
+| 3–4 | 若机制、原因和方向稳定，可标记 `PATTERN_CANDIDATE`。 |
+| 约 5 个或更多 | 仅当机制、原因、方向、独立性、证据质量和无明显反例同时成立时，才可提醒用户考虑规则。 |
+
+“约 5 个”是默认决策门槛，不会自动形成规则。高度相似商品只能支持窄范围；多个不同子类型仍稳定时才可扩大范围。AI 原估算正确的记录也必须保存，用于将来的 Replay 和保护正确行为。
+
+## 4. 用户确认与生命周期
+
+首次达到规则条件时，Agent 简短提示：
+
+> 当前 XXX 规律已有 X 个独立样本，误差方向稳定，已达到规则候选条件。是否纳入待发布规则？
+
+用户同意“纳入”只将该规律标为 `APPROVED_PENDING_PUBLICATION`。它不生成 Rule Package、ZIP，不导入软件，也不生效。用户暂不纳入后继续积累；除非有新反例、明显新证据或范围实质扩大，不因每条新增记录重复提醒。
+
+统一生命周期：
 
 ```text
-普通 Calibration Record
-  → 多个独立商品出现相似问题：PATTERN_CANDIDATE
-  → 合理样本量且证据方向一致：RULE_CANDIDATE
-  → 交给 Profit-Accounting Validator / Replay
-  → 验证通过后才允许进入正式规则包
+RECORDED
+→ PATTERN_CANDIDATE
+→ APPROVED_PENDING_PUBLICATION
+→ EXPORTED_PENDING_ACTIVATION
+→ SOFTWARE_ACTIVE
 ```
 
-Agent 不得自行宣布 `VALIDATED`；validated 之后必须由软件正式工具生成。
+Agent 不能自行写入 `SOFTWARE_ACTIVE`，也不能声明 `VALIDATED`。只有 Profit-Accounting 正式 Replay、Validator、Promotion 完成且确认实际激活后，才允许记录软件已生效。
 
-## 11. 默认单位约定
+## 5. Clean Rules
 
-尺寸 cm、重量 g、运费 CNY。若源数据使用其他单位，在 `user_note` 或 `source` 中注明。
+`archive/legacy/`、CAL77 与旧补丁继续保存，但默认不读取、不自动加入 Clean Rules，也不是新规则来源。
 
-## 12. Token 控制
+下一版 Clean Rules 只能由“上一版 Clean Rules + 本轮用户批准待发布规则”组成。新规则若与现有 Clean Rule 重叠，必须明确标为：补充、缩小范围、扩大范围或替代；不得依靠 priority 静默覆盖。
 
-- 单条普通校准默认最多输出五行：记录 / 证据 / 结果 / 分类 / 处理。
-- 批量校准默认只报告：总数量、成功、缺失、异常、各 error_type 数量、新发现的重复模式。
-- 已正常记录的商品不重复解释；只重点输出数据冲突、严重异常、新模式、需用户判断的记录。
+## 6. 非目标
 
-## 13. 禁止复杂自动学习系统
-
-不开发：机器学习、embedding/向量库、自动规则自修改、自动 runtime 激活、第二套 estimator、知识图谱、多 Agent 编排、自动大量模型复审、逐条全历史 replay。
-
-当前目标：稳定积累高质量 Calibration Record。
+本 V1 不修改 Profit-Accounting 或其 Prompt，不开发第二个 estimator、自动 Candidate Rule 生成、数据库、ML、向量库、知识图谱、多 Agent 系统、正式规则包/ZIP 导出，也不批量重分析 legacy。

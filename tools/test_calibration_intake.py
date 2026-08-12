@@ -3,7 +3,7 @@
 """
 Direct Calibration Intake V1 关键风险测试。
 覆盖：单条保存 / 批量转换 / 缺字段不失败 / UNKNOWN 保存 / 不覆盖 / record_id 唯一 /
-不读取历史归档 / 不包含 estimator / 不生成 validated rule / dry-run / JSON/JSONL/Excel。
+不读取历史归档 / 不包含 estimator / 生命周期写入边界 / 物理机制 / dry-run / JSON/JSONL/Excel。
 运行：python tools/test_calibration_intake.py
 """
 
@@ -50,6 +50,7 @@ def main():
             actual_freight="44.20",
             error_direction="HIGH",
             error_type="FOLDING_COMPRESSION",
+            physical_mechanism="STRONG_COMPRESSION",
             user_note="偏高",
         )
         check("1 单条保存", rec_file.exists() and len(rec_file.read_text(encoding="utf-8").splitlines()) == 1)
@@ -58,6 +59,7 @@ def main():
             "1 必填结构",
             all(k in rec for k in ("record_id", "product", "evidence", "baseline", "actual", "feedback", "analysis", "provenance")),
         )
+        check("1 物理机制保存", rec["analysis"]["physical_mechanism"] == "STRONG_COMPRESSION")
 
         # 2/3/4. 批量 CSV 转换 + 缺字段不失败 + UNKNOWN 保存
         csv_path = tmp / "batch.csv"
@@ -92,17 +94,24 @@ def main():
         forbidden = ("packing_engine", "class Estimator", "def calculate_freight", "volumetric", "logistics_config")
         check("8 不包含 estimator", not any(f in src_text for f in forbidden))
 
-        # 9. 不生成 validated rule
+        # 9. Agent 不得写入软件激活状态；可记录统一生命周期中的前四个 Agent 状态。
         try:
             ci.intake_single(fresh_file(tmp), name="X", status="VALIDATED")
             check("9 拒绝 VALIDATED", False)
         except ValueError:
             check("9 拒绝 VALIDATED", True)
+        try:
+            ci.intake_single(fresh_file(tmp), name="X", status="SOFTWARE_ACTIVE")
+            check("9 拒绝 SOFTWARE_ACTIVE", False)
+        except ValueError:
+            check("9 拒绝 SOFTWARE_ACTIVE", True)
         rec_normal = ci.intake_single(fresh_file(tmp), name="Y")
         check("9 不写入 VALIDATED", rec_normal["analysis"]["status"] != "VALIDATED")
-        rows_v = [{"name": "V", "status": "VALIDATED"}, {"name": "W"}]
+        rec_candidate = ci.intake_single(fresh_file(tmp), name="P", status="PATTERN_CANDIDATE")
+        check("9 记录规律候选", rec_candidate["analysis"]["status"] == "PATTERN_CANDIDATE")
+        rows_v = [{"name": "V", "status": "SOFTWARE_ACTIVE"}, {"name": "W"}]
         saved_v, summary_v = ci.intake_batch(fresh_file(tmp), rows_v, source_type="BATCH_CSV")
-        check("9 批量跳过 VALIDATED 行", len(saved_v) == 1 and summary_v["skipped"] == 1)
+        check("9 批量跳过软件已生效行", len(saved_v) == 1 and summary_v["skipped"] == 1)
 
         # 10. JSON / JSONL / dry-run / Excel
         json_path = tmp / "batch.json"

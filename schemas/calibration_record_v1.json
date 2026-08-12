@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "local://logistics-calibration/schemas/calibration_record_v1.json",
   "title": "Calibration Record V1",
-  "description": "物流校准工作台统一校准记录。字段可以为空：未知字符串写 UNKNOWN，未知数字写 null。默认单位约定：尺寸 cm、重量 g、运费 CNY；如源数据使用其他单位，请在 user_note 或 source 中注明。analysis.status 只允许 Agent 可写状态；VALIDATED 只能由软件正式工具生成。",
+  "description": "物流校准工作台统一校准记录。字段可以为空：未知字符串写 UNKNOWN，未知数字写 null。默认单位约定：尺寸 cm、重量 g、运费 CNY；如源数据使用其他单位，请在 user_note 或 source 中注明。analysis.physical_mechanism 只用于聚合同一物理或包装机制。analysis.status 采用治理生命周期；SOFTWARE_ACTIVE 只能在软件正式流程完成并确认激活后写入。",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -106,10 +106,15 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["RECORDED", "ANOMALY", "PATTERN_CANDIDATE", "RULE_CANDIDATE", "NEEDS_REVIEW"],
-          "description": "Agent 可写状态；VALIDATED 只能由软件正式工具生成"
+          "enum": ["RECORDED", "PATTERN_CANDIDATE", "APPROVED_PENDING_PUBLICATION", "EXPORTED_PENDING_ACTIVATION", "SOFTWARE_ACTIVE"],
+          "description": "统一生命周期。intake 只允许 Agent 写入前四个状态；SOFTWARE_ACTIVE 只能由完成正式 Replay、Validator、Promotion 并确认实际激活的软件流程写入"
         },
-        "possible_pattern": { "type": "string" }
+        "possible_pattern": { "type": "string" },
+        "physical_mechanism": {
+          "type": "string",
+          "enum": ["FULL_FLAT_FOLD", "STRONG_COMPRESSION", "MODERATE_COMPRESSION", "SHAPE_RETAINED", "UNKNOWN"],
+          "description": "Agent 内部分析标签；无法可靠判断时为 UNKNOWN。不是规则分类，也不以 packing_action 等细节作为强制规则维度"
+        }
       }
     },
     "provenance": {

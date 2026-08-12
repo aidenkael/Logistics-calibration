@@ -7,7 +7,7 @@ Direct Calibration Intake V1
 （schemas/calibration_record_v1.json），追加保存到 data/calibration_records.jsonl。
 
 边界（与 docs/CALIBRATION_RULES.md 一致）：
-- 只记录，不计算运费，不实现第二套物流计算器，不生成 validated rule。
+ - 只记录，不计算运费，不实现第二套物流计算器，不生成或导出规则包。
 - 不读取历史归档目录。
 - 未知字符串保存为 UNKNOWN，未知数字保存为 null；缺失字段不导致整批失败。
 - 只追加不覆盖；record_id 自动生成并保证唯一。
@@ -47,7 +47,25 @@ ERROR_TYPES = frozenset(
 )
 ERROR_DIRECTIONS = frozenset({"HIGH", "LOW", "MIXED", "UNKNOWN"})
 EVIDENCE_LEVELS = frozenset({"A", "B", "C", "D", "UNKNOWN"})
-STATUSES = frozenset({"RECORDED", "ANOMALY", "PATTERN_CANDIDATE", "RULE_CANDIDATE", "NEEDS_REVIEW"})
+LIFECYCLE_STATUSES = frozenset(
+    {
+        "RECORDED",
+        "PATTERN_CANDIDATE",
+        "APPROVED_PENDING_PUBLICATION",
+        "EXPORTED_PENDING_ACTIVATION",
+        "SOFTWARE_ACTIVE",
+    }
+)
+AGENT_WRITABLE_STATUSES = LIFECYCLE_STATUSES - {"SOFTWARE_ACTIVE"}
+PHYSICAL_MECHANISMS = frozenset(
+    {
+        "FULL_FLAT_FOLD",
+        "STRONG_COMPRESSION",
+        "MODERATE_COMPRESSION",
+        "SHAPE_RETAINED",
+        "UNKNOWN",
+    }
+)
 SOURCE_TYPES = frozenset(
     {
         "SINGLE",
@@ -90,6 +108,7 @@ FIELD_ALIASES = {
     "error_type": ("error_type", "误差类型", "分类"),
     "status": ("status", "状态"),
     "possible_pattern": ("possible_pattern", "pattern", "可能模式"),
+    "physical_mechanism": ("physical_mechanism", "mechanism", "物理机制", "包装机制"),
 }
 
 
@@ -216,6 +235,7 @@ def make_record(
     error_type=None,
     status=None,
     possible_pattern=None,
+    physical_mechanism=None,
     source_type="SINGLE",
     created_at=None,
     image_dir=None,
@@ -250,8 +270,9 @@ def make_record(
             "error_type": norm_enum(error_type, ERROR_TYPES),
         },
         "analysis": {
-            "status": norm_enum(status, STATUSES, default="RECORDED"),
+            "status": norm_enum(status, AGENT_WRITABLE_STATUSES, default="RECORDED"),
             "possible_pattern": "" if possible_pattern is None else str(possible_pattern).strip(),
+            "physical_mechanism": norm_enum(physical_mechanism, PHYSICAL_MECHANISMS),
         },
         "provenance": {
             "created_at": created_at or now_iso(),
@@ -261,7 +282,7 @@ def make_record(
 
 
 def validate_record(record):
-    """结构校验，返回问题列表。Agent 不得写入 VALIDATED。"""
+    """结构校验，返回问题列表。软件激活状态只能由软件正式流程写入。"""
     problems = []
     if not record.get("record_id") or not RECORD_ID_RE.match(str(record["record_id"])):
         problems.append("record_id 格式应为 CAL-XXXX")
@@ -271,8 +292,10 @@ def validate_record(record):
         problems.append("error_direction 非法")
     if record["feedback"]["error_type"] not in ERROR_TYPES:
         problems.append("error_type 非法")
-    if record["analysis"]["status"] not in STATUSES:
-        problems.append("analysis.status 非法（Agent 不得写入 VALIDATED）")
+    if record["analysis"]["status"] not in LIFECYCLE_STATUSES:
+        problems.append("analysis.status 非法")
+    if record["analysis"]["physical_mechanism"] not in PHYSICAL_MECHANISMS:
+        problems.append("analysis.physical_mechanism 非法")
     if record["provenance"]["source_type"] not in SOURCE_TYPES:
         problems.append("source_type 非法")
     return problems
@@ -320,8 +343,8 @@ def append_record(path, record):
 
 def intake_single(records_path, dry_run=False, **fields):
     records_path = Path(records_path)
-    if fields.get("status") is not None and str(fields["status"]).strip().upper() == "VALIDATED":
-        raise ValueError("Agent 不得写入 VALIDATED")
+    if fields.get("status") is not None and str(fields["status"]).strip().upper() in {"VALIDATED", "SOFTWARE_ACTIVE"}:
+        raise ValueError("Agent 不得写入 VALIDATED 或 SOFTWARE_ACTIVE")
     existing = load_existing_ids(records_path)
     rid = fields.get("record_id")
     if rid:
@@ -378,6 +401,7 @@ def map_row(row, image_dir=None):
         "error_type": pick("error_type"),
         "status": pick("status"),
         "possible_pattern": pick("possible_pattern"),
+        "physical_mechanism": pick("physical_mechanism"),
     }
 
 
@@ -395,8 +419,8 @@ def intake_batch(records_path, rows, source_type="BATCH_CSV", image_dir=None, dr
                 skipped.append({"row": idx, "reason": "行不是键值对象"})
                 continue
             mapped = map_row(row, image_dir)
-            if mapped.get("status") is not None and str(mapped["status"]).strip().upper() == "VALIDATED":
-                skipped.append({"row": idx, "reason": "Agent 不得写入 VALIDATED"})
+            if mapped.get("status") is not None and str(mapped["status"]).strip().upper() in {"VALIDATED", "SOFTWARE_ACTIVE"}:
+                skipped.append({"row": idx, "reason": "Agent 不得写入 VALIDATED 或 SOFTWARE_ACTIVE"})
                 continue
             rid = mapped.pop("record_id", None)
             if rid:
@@ -433,7 +457,7 @@ def intake_batch(records_path, rows, source_type="BATCH_CSV", image_dir=None, dr
         "anomalies": sum(
             1
             for r in saved
-            if r["analysis"]["status"] in ("ANOMALY", "NEEDS_REVIEW") or r["feedback"]["error_type"] == "DATA_CONFLICT"
+            if r["feedback"]["error_type"] == "DATA_CONFLICT"
         ),
         "error_type_counts": error_type_counts,
         "repeated_patterns": repeated,
@@ -582,6 +606,7 @@ def build_parser():
     single.add_argument("--error-type")
     single.add_argument("--status")
     single.add_argument("--possible-pattern")
+    single.add_argument("--physical-mechanism")
     single.add_argument("--record-id")
     single.add_argument("--dry-run", action="store_true")
 
@@ -619,6 +644,7 @@ def main(argv=None):
                 "error_type": args.error_type,
                 "status": args.status,
                 "possible_pattern": args.possible_pattern,
+                "physical_mechanism": args.physical_mechanism,
             }
             record = intake_single(records_file, dry_run=args.dry_run, **fields)
             print_single(record, dry_run=args.dry_run)
