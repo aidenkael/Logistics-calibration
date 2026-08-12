@@ -1,0 +1,58 @@
+{
+  "product_type": "canvas_tote_bag",
+  "product_title": "帆布袋定制 广告宣传棉布手提袋空白购物袋单肩帆布包定做",
+  "selected_sku": "竖款 本色2025",
+  "quantity": 1,
+  "quantity_source": "user_confirmed",
+  "category": "bag",
+  "material_family": "canvas",
+  "rigidity": "soft",
+  "foldability": "good",
+  "compressibility": "good",
+  "has_rigid_parts": false,
+  "requires_shape_retention": false,
+  "ai_net_weight_kg": 0.08,
+  "ai_package_size_cm": [25, 20, 4],
+  "ai_package_weight_kg": 0.085,
+  "conservative_package_size_cm": [25, 20, 4],
+  "conservative_package_weight_kg": 0.085,
+  "overall_form": "soft_flat",
+  "conservative_risk_basis": "weight_uncertainty",
+  "rigid_body_size_cm": [],
+  "foldable_parts": ["handle"],
+  "detachable_parts": [],
+  "shape_retention_scope": "none",
+  "modifiers": [],
+  "packaging_method": "OPP袋",
+  "folding_action": "把手折叠",
+  "compression_action": "轻度压缩",
+  "packaging_type": "opp_bag",
+  "weight_scope": "net_weight",
+  "dimension_scope": "product_size",
+  "material": "棉/帆布",
+  "image_path": "C:/Users/THUNDEROBOT/.workbuddy/clipboard-images/clipboard-2026-08-06T03-48-11-828Z-063bc7f3.png",
+  "product_link": "",
+  "notes": "目标SKU为竖款 本色2025。20x25cm从SKU名【2025】按命名规则解析为20x25cm(merchant_text, scope=product_size)。商家未给出确切gusset和重量，AI按小型帆布袋常见尺寸与重量估算：厚度4cm、净重0.08kg。包邮，运费按0处理。",
+  "structure_evidence": [
+    {
+      "fact": "soft_canvas",
+      "source": "image_visible",
+      "location": "图2主图帆布袋呈软质自然褶皱外观，无硬壳结构"
+    },
+    {
+      "fact": "soft_handles",
+      "source": "image_visible",
+      "location": "图2主图帆布提手带，软质"
+    },
+    {
+      "fact": "size_sku_2025",
+      "source": "merchant_text",
+      "location": "SKU名竖款 本色2025，按命名规则解析为20x25cm"
+    },
+    {
+      "fact": "no_weight_data",
+      "source": "image_visible",
+      "location": "图2未给出当前SKU的重量数据，按ai_inferred处理"
+    }
+  ]
+}

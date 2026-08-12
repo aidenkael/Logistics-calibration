@@ -1,0 +1,126 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "local://logistics-calibration/schemas/calibration_record_v1.json",
+  "title": "Calibration Record V1",
+  "description": "物流校准工作台统一校准记录。字段可以为空：未知字符串写 UNKNOWN，未知数字写 null。默认单位约定：尺寸 cm、重量 g、运费 CNY；如源数据使用其他单位，请在 user_note 或 source 中注明。analysis.status 只允许 Agent 可写状态；VALIDATED 只能由软件正式工具生成。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "record_id",
+    "product",
+    "evidence",
+    "baseline",
+    "actual",
+    "feedback",
+    "analysis",
+    "provenance"
+  ],
+  "properties": {
+    "record_id": {
+      "type": "string",
+      "pattern": "^CAL-\\d{4,}$",
+      "description": "唯一记录 ID，格式 CAL-XXXX（自动生成或显式提供）"
+    },
+    "product": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "quantity": { "type": ["integer", "null"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "images": { "type": "array", "items": { "type": "string" } },
+        "source": { "type": "string" },
+        "evidence_level": {
+          "type": "string",
+          "enum": ["A", "B", "C", "D", "UNKNOWN"],
+          "description": "A=直接测量充分；B=可靠物流/计费事实但包装不完整；C=主要只有实际物流费用或间接证据；D=人工判断或低确定性"
+        }
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "properties": {
+        "dimensions": {
+          "type": ["object", "null"],
+          "properties": {
+            "length": { "type": ["number", "null"] },
+            "width": { "type": ["number", "null"] },
+            "height": { "type": ["number", "null"] }
+          }
+        },
+        "weight": { "type": ["number", "null"] },
+        "freight": { "type": ["number", "null"] },
+        "forwarder": { "type": ["string", "null"] }
+      }
+    },
+    "actual": {
+      "type": "object",
+      "properties": {
+        "dimensions": {
+          "type": ["object", "null"],
+          "properties": {
+            "length": { "type": ["number", "null"] },
+            "width": { "type": ["number", "null"] },
+            "height": { "type": ["number", "null"] }
+          }
+        },
+        "weight": { "type": ["number", "null"] },
+        "freight": { "type": ["number", "null"] },
+        "forwarder": { "type": ["string", "null"] }
+      }
+    },
+    "feedback": {
+      "type": "object",
+      "properties": {
+        "user_note": { "type": "string" },
+        "error_direction": {
+          "type": "string",
+          "enum": ["HIGH", "LOW", "MIXED", "UNKNOWN"]
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "DIMENSION_HIGH",
+            "DIMENSION_LOW",
+            "WEIGHT_HIGH",
+            "WEIGHT_LOW",
+            "PACKAGING_ASSUMPTION",
+            "FOLDING_COMPRESSION",
+            "STRUCTURE_MISREAD",
+            "QUANTITY_MISMATCH",
+            "SKU_MISMATCH",
+            "FREIGHT_MISMATCH",
+            "FORWARDER_MISMATCH",
+            "DATA_CONFLICT",
+            "UNKNOWN"
+          ]
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["RECORDED", "ANOMALY", "PATTERN_CANDIDATE", "RULE_CANDIDATE", "NEEDS_REVIEW"],
+          "description": "Agent 可写状态；VALIDATED 只能由软件正式工具生成"
+        },
+        "possible_pattern": { "type": "string" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "created_at": { "type": "string", "format": "date-time" },
+        "source_type": {
+          "type": "string",
+          "enum": ["SINGLE", "BATCH_CSV", "BATCH_EXCEL", "BATCH_JSON", "BATCH_JSONL", "BATCH_IMAGES", "UNKNOWN"]
+        }
+      }
+    }
+  }
+}

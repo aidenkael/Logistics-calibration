@@ -1,0 +1,14 @@
+# Local paths (gitignored)
+config/local_paths.json
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
+
+# Temporary batch work
+work/*
+!work/.gitkeep
+
+# User imported materials
+inbox/*
+!inbox/.gitkeep
