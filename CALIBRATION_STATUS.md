@@ -11,4 +11,10 @@
 - Replay 保护集：33 条（CAL-0001、CAL-0004、CAL-0005、CAL-0008、CAL-0010、CAL-0012、CAL-0014、CAL-0015、CAL-0018、CAL-0020、CAL-0028、CAL-0030、CAL-0034、CAL-0035、CAL-0038、CAL-0039、CAL-0043、CAL-0044、CAL-0046、CAL-0048、CAL-0049、CAL-0051、CAL-0052、CAL-0056、CAL-0057、CAL-0058、CAL-0059、CAL-0060、CAL-0061、CAL-0066、CAL-0070、CAL-0076、CAL-0079），其中 23 条同时为自然收纳保护规律支持样本、10 条为普通保护样本。任何新 candidate 必须 Replay 该集合及旧错误修正样本，不得静默破坏。
 - 证据图片稳定路径：批次83 全部 145 张原始证据图（约 29MB，未重编码）已入库 `data/product_images/prima83/`，记录内引用为仓库相对路径，可长期 Replay。
 - 最近一次重要变化：2026-08-16，用户确认批准 2 条规律（展示/支撑态≠运输态、自然折叠/袋装/收纳状态保护），30 条记录状态更新为 APPROVED_PENDING_PUBLICATION；Clean Rules 仍为 0、SOFTWARE_ACTIVE 仍为 0；未生成 Rule Package、未写 EXPORTED_PENDING_ACTIVATION、未修改 Governance/Schema/2.6.1。
-- 下一步建议：等待用户或后续流程将 2 条已批准规律部署到 Prompt 层；未来校准反馈尽量补充真实包装尺寸/重量以提升证据等级。
+- 批次83 最终收口：2026-08-16 完成。最终正式规则包 1 个（`data/formal_rule_package_fb83_final.json`，Agent Calibration Rule Package V1，status=candidate，通过 2.6.1 官方 validator，0 issues），内含 2 条保护规则：
+  1. **fb83-protect-shape-retention-v1（硬质/保形保护）**：requires_shape_retention=true 且有可靠刚性证据时禁止无依据压缩/折叠（保持型 scale=1.0）；支持 9 条硬质样本（CAL-0003/0005/0006/0012/0014/0021/0038/0052/0076），保护边界 012/076。
+  2. **fb83-protect-natural-storage-v1（自然收纳/软质折叠保护）**：foldability=good+compressibility=good+非硬质时保持收纳外廓，防无依据再展开/二次压缩；支持 17 条软质收纳样本，保护边界 001/034/043/059/066。
+- 展示态≠运输态：不单独成规则（V1 词汇无法表达运输外廓数值纠正，且禁反推压缩率），治理意图由引擎内建 `_display_outline_requires_transport_evidence` 承担；触发前置为上游填充柔性商品 requires_shape_retention/dimension_scope。小件包装低估（021/029/031/033）继续保持 PATTERN_CANDIDATE，不进入规则包。
+- 规则零命中的根因：83 条 observation 语义字段（rigidity/foldability/compressibility/requires_shape_retention/packing_actions/overall_form）全为空 + 无真实包装 truth；接入最小要求见 `docs/FB83_FINAL_CLOSURE_REPORT.md` §8（全部为数据捕获层字段填充，引擎无修改点）。
+- 83 条正式冻结：未来仅新增真实物流反馈时再继续校准，不再开展新实验、不重新识别图片、不调用 AI API。
+- 下一步建议：等待用户决定（a）固化 Git 提交，或（b）上游 observation 捕获链路补齐语义字段后，由软件侧跑 promotion 生成 validated 包与 Formal Bundle；未自动提交/激活。

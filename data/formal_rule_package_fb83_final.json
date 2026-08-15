@@ -1,0 +1,93 @@
+{
+  "schema_version": "agent-calibration-rule-package-v1",
+  "package_id": "fb83-protection-final-v1",
+  "calibration_version": "fb83-protection-final-v1",
+  "created_at": "2026-08-16T10:00:00.000000Z",
+  "generator": "logistics-calibration-workbench/fb83-final-rule-package",
+  "source_export_batch_ids": [
+    "17cb758538c24fd3a1cfa675e7c16862"
+  ],
+  "base_engine_version": "packaging-estimation-v2-candidate-arbitration",
+  "base_calibration_version": "runtime-safety-only-v1.2",
+  "status": "candidate",
+  "rules": [
+    {
+      "rule_id": "fb83-protect-shape-retention-v1",
+      "enabled": true,
+      "priority": 100,
+      "description": "硬质/保形商品保护（保护规则）：当 observation 判定 requires_shape_retention=true 且经引擎保留（存在硬底/硬框/刚性部件/硬背板等可靠刚性证据）时，CAL 以原始外廓为基准（normal scale=1.0，不做任何压缩/折叠变换），防止 AI 或 CAL 无依据压扁、折叠或大幅缩小。介入边界：仅 requires_shape_retention=true 时介入；AI 提案完整时零字段修改（保持 AI 结果）；AI 缺字段时以原始外廓保持型填充；无刚性证据的保形自证由引擎 _remove_unsupported_shape_retention 先移除，本规则不放大 AI 自证。",
+      "match": {
+        "requires_shape_retention": true
+      },
+      "guard": {
+        "any_hard_structure_or_shape_retention": true
+      },
+      "action": {
+        "type": "smallest_axis_scale",
+        "normal": 1.0,
+        "conservative": 1.06,
+        "min_cm": 0.5
+      },
+      "evidence": {
+        "source_record_ids": [
+          "CAL-0003",
+          "CAL-0005",
+          "CAL-0006",
+          "CAL-0012",
+          "CAL-0014",
+          "CAL-0021",
+          "CAL-0038",
+          "CAL-0052",
+          "CAL-0076"
+        ],
+        "sample_count": 9,
+        "rationale": "来源：83 条校准（批次 fb83）。错误/支持样本（语义上明确硬质/保形）：CAL-0003 磨蒜器(-50% LOW)、CAL-0005 徽章(-13.3% LOW)、CAL-0006 徽章(+100% HIGH)、CAL-0014 保温杯(+8.7% HIGH)、CAL-0021 卡祖笛(-64.3% LOW)、CAL-0038 象鼻神(-13.1% LOW)、CAL-0052 麦芽糖球(-14.3% LOW)，方向分散，说明硬质商品被无依据压缩/放大，本规则只保护不纠错，不反推任何压缩率。正常估算保护边界样本（err≈0）：CAL-0012 招财猫(0%)、CAL-0076 化妆镜(-3.4%)，R1 命中且 AI 提案完整时零字段修改，不破坏正确估计。反例防护：软质商品若 AI 误填 requires_shape_retention=true 且无刚性证据，引擎先移除该字段，R1 不命中。命中依赖 observation.requires_shape_retention 及刚性证据字段被上游填充；当前 83 条 observation 该字段全为 None，实测零命中、零误伤。"
+      }
+    },
+    {
+      "rule_id": "fb83-protect-natural-storage-v1",
+      "enabled": true,
+      "priority": 90,
+      "description": "自然收纳/软质折叠保护（保护规则）：对 foldability=good、compressibility=good 且非硬质（forbid_hard_structure）的商品，若已处于自然折叠/袋装/闭合/盘卷等收纳或接近运输状态，CAL 保持原始外廓（normal scale=1.0），防止 AI 无依据再次展开或二次压缩。介入边界：仅软质可折叠非硬质时介入；AI 提案完整且等于收纳外廓时零字段修改（保持 AI 结果）；AI 缺字段时保持型填充；硬质商品由 forbid_hard_structure 排除；若 observation 尺寸本身为展示撑开态，本规则不修改该基准（展示态纠正由引擎内建 display 检查承担，见接入要求）。",
+      "match": {
+        "foldability": [
+          "good"
+        ],
+        "compressibility": [
+          "good"
+        ],
+        "forbid_hard_structure": true
+      },
+      "action": {
+        "type": "smallest_axis_scale",
+        "normal": 1.0,
+        "conservative": 1.06,
+        "min_cm": 0.5
+      },
+      "evidence": {
+        "source_record_ids": [
+          "CAL-0001",
+          "CAL-0004",
+          "CAL-0008",
+          "CAL-0020",
+          "CAL-0034",
+          "CAL-0035",
+          "CAL-0043",
+          "CAL-0044",
+          "CAL-0048",
+          "CAL-0049",
+          "CAL-0056",
+          "CAL-0057",
+          "CAL-0058",
+          "CAL-0059",
+          "CAL-0060",
+          "CAL-0066",
+          "CAL-0070"
+        ],
+        "sample_count": 17,
+        "rationale": "来源：83 条校准（批次 fb83），自然收纳保护支持 23 条中的 17 条软质可折叠样本。错误/支持样本（12 条，方向分散，表明 AI 既可能无依据放大也可能二次压缩）：HIGH CAL-0008 贝壳包(+12.5%)、CAL-0035 背带(+7.1%)、CAL-0056 粘毛器(+10%)、CAL-0057 便签夹(+5%)、CAL-0058 冰敷帽(+15.8%)、CAL-0070 折扇(+15.8%)；LOW CAL-0004 零钱包(-8.3%)、CAL-0020 皮革花(-6.2%)、CAL-0044 信封包(-8.8%)、CAL-0048 发抓(-10%)、CAL-0049 折叠水杯(-12%)、CAL-0060 行李牌(-12.5%)。正常估算保护边界样本（err≈0）：CAL-0001 分趾袜(0%)、CAL-0034 手柄(0%)、CAL-0043 宠物梳(+4.2%)、CAL-0059 溜溜球(0%)、CAL-0066 钥匙扣(0%)，R2 命中时保持外廓，不破坏正确估计。反例防护：硬质商品 foldability 误填 good 时由 forbid_hard_structure 排除。命中依赖 observation.foldability/compressibility 被上游填充，当前 83 条该字段全为空，实测零命中、零误伤。V1 match 词汇无收纳状态键，以 foldability/compressibility 近似；若上游产出 packing_actions（fold/roll/nest）或 packaging_state_hint，应据此缩窄本规则。"
+      }
+    }
+  ],
+  "validation": null
+}
