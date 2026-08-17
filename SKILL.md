@@ -18,6 +18,15 @@ python tools/calibration_intake.py single --name "商品" --sku "SKU-1" --source
 - `packing_action` 等细节只能是辅助证据，不是强制规则维度。
 - 录入不会计算运费、不会生成候选规则包，也不会读取 `archive/legacy/`。Direct 只取首次视觉服务的 `normal` 包装候选作为 baseline，不调用 `LocalReestimateService` 或 `PackagingEstimationService`。
 
+## 费用反推边界
+
+- 当货代、费率和实际费用已确认属于纯头程时，可以计算 `费率等价计费重量 = 实际纯头程 / 费率`，但该值默认仍是派生证据，不回写覆盖原始 actual/baseline。
+- 在最低计费、进位、账单取整等规则尚未确认时，不把该值直接宣称为唯一真实物理计费重量。
+- 只有存在独立可信的实际/商家重量、包装尺寸、货代称重/体积记录或同等级证据时，才进一步判断“实重主导 / 体积重主导”。
+- 只有确认体积重主导后，才允许由计费重量反推近似运输总体积；如果存在进位，应输出区间。
+- 只有再增加可信尺寸/结构/包装动作约束后，才允许估计长宽高范围；永远不能只凭单笔运费拆出唯一 L×W×H。
+- AI baseline 的 weight/dimensions 是被校准对象，不能作为证明自身正确的 truth。
+
 ## 治理
 
 按 `docs/CALIBRATION_RULES.md` 判断独立样本、误差原因、方向、证据和反例。达到条件时只向用户发出一次简短纳入询问；用户同意后状态变为 `APPROVED_PENDING_PUBLICATION`，仍不导出、不导入、不生效。
