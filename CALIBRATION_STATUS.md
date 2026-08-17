@@ -16,5 +16,7 @@
   2. **fb83-protect-natural-storage-v1（自然收纳/软质折叠保护）**：foldability=good+compressibility=good+非硬质时保持收纳外廓，防无依据再展开/二次压缩；支持 17 条软质收纳样本，保护边界 001/034/043/059/066。
 - 展示态≠运输态：不单独成规则（V1 词汇无法表达运输外廓数值纠正，且禁反推压缩率），治理意图由引擎内建 `_display_outline_requires_transport_evidence` 承担；触发前置为上游填充柔性商品 requires_shape_retention/dimension_scope。小件包装低估（021/029/031/033）继续保持 PATTERN_CANDIDATE，不进入规则包。
 - 规则零命中的根因：83 条 observation 语义字段（rigidity/foldability/compressibility/requires_shape_retention/packing_actions/overall_form）全为空 + 无真实包装 truth；接入最小要求见 `docs/FB83_FINAL_CLOSURE_REPORT.md` §8（全部为数据捕获层字段填充，引擎无修改点）。
-- 83 条正式冻结：未来仅新增真实物流反馈时再继续校准，不再开展新实验、不重新识别图片、不调用 AI API。
-- 下一步建议：等待用户决定（a）固化 Git 提交，或（b）上游 observation 捕获链路补齐语义字段后，由软件侧跑 promotion 生成 validated 包与 Formal Bundle；未自动提交/激活。
+- **2026-08-17 费用反推重算完成**：原始 v1.3 baseline、用户备注和实际纯头程全部保持不动；新增 `data/fb83_freight_inference_v1.csv` 与 `docs/FB83_FREIGHT_REINFERENCE_2026-08-17.md`。83/83 可计算费率等价计费重量；79 条 evidence=B 可作为边界证据，002/025/041/075 四条 evidence=D 继续 HOLD。由于 83 条 `actual.weight` 与 `actual.dimensions` 均为空，当前 0 条能够仅凭结构化数据证明实重/体积重主导，0 条可可靠反推运输总体积或长宽高范围；本轮新增数值 CAL=0。
+- 2026-08-17 重算进一步支持：展示/支撑态≠运输态的 7 条明确异常样本实际/基线比值约 0.083–0.643，离散很大，因此继续禁止固定压缩倍率；小件包装 4 条 actual/baseline 约 1.60–3.33，方向稳定但无法区分实重/体积来源，继续 PATTERN_CANDIDATE。
+- 历史 83 条首次 AI baseline 继续冻结，不允许覆盖；后续新 Prompt 结果必须独立保存。费用派生分析可以继续追加，但不得把 AI baseline 的尺寸/重量当成 truth 自证。
+- 当前下一步：暂不重跑新 Prompt。只有获得实际包装后重量、商家可信重量、实际包装尺寸或货代称重/体积记录等独立证据时，再升级实重/体积重主导、总体积或尺寸范围判断。
