@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 from software_feedback_v2_intake import (
     CONTRACT_VERSION,
     IntakeError,
+    _extract_constraints,
     build_calibration_record,
     dedup_key,
     extract_actual,
@@ -34,6 +35,7 @@ from software_feedback_v2_intake import (
     extract_feedback,
     import_manifest,
     load_manifest,
+    load_schema,
     next_cal_id,
     validate_record_v1,
 )
@@ -452,7 +454,7 @@ def test_validate_rejects_bad_record_id():
         "provenance": {"created_at": "2026-01-01T00:00:00Z", "source_type": "SINGLE"},
     }
     errs = validate_record_v1(record)
-    assert any("CAL-XXXX" in e for e in errs)
+    assert any("pattern" in e for e in errs)
 
 
 def test_validate_accepts_minimal_record():
@@ -493,6 +495,129 @@ def test_dry_run_no_write():
                 assert index_path.read_bytes() == backups["index"]
         finally:
             restore_data_files(backups)
+
+
+# ── Schema 驱动校验测试 ──
+
+def test_schema_file_loads():
+    """schema 文件可正常加载"""
+    schema = load_schema(reload=True)
+    assert isinstance(schema, dict)
+    assert schema["type"] == "object"
+    assert "record_id" in schema["properties"]
+    assert schema.get("additionalProperties") is False
+
+
+def test_schema_validates_v2_record():
+    """schema 加载后验证 V2 转换记录通过"""
+    schema = load_schema(reload=True)
+    manifest = make_minimal_v2_manifest()
+    record = manifest["records"][0]
+    cal_record = build_calibration_record(record, "test_batch_001", "CAL-9001")
+    errs = validate_record_v1(cal_record, _schema=schema)
+    assert errs == [], f"Schema 驱动校验失败: {errs}"
+
+
+def test_schema_drives_required():
+    """validator 的 required 从 schema 读取，不是硬编码"""
+    schema = load_schema(reload=True)
+
+    # 构造一个缺少 evidence 字段的记录
+    minimal = {
+        "record_id": "CAL-0001",
+        "product": {"name": "test", "sku": "X"},
+        # "evidence" 缺失
+        "baseline": {"dimensions": None, "weight": None, "freight": None, "forwarder": None},
+        "actual": {"dimensions": None, "weight": None, "freight": None, "forwarder": None},
+        "feedback": {"user_note": "", "error_direction": "UNKNOWN", "error_type": "UNKNOWN"},
+        "analysis": {"status": "RECORDED", "possible_pattern": "", "physical_mechanism": "UNKNOWN"},
+        "provenance": {"created_at": "2026-01-01T00:00:00Z", "source_type": "SINGLE"},
+    }
+    # 原始 schema 应报错
+    errs = validate_record_v1(minimal, _schema=schema)
+    assert any("evidence" in e for e in errs)
+
+    # 修改 schema：移除 evidence 从 required
+    modified = json.loads(json.dumps(schema))
+    modified["required"] = ["record_id", "product", "baseline", "actual", "feedback", "analysis", "provenance"]
+    errs2 = validate_record_v1(minimal, _schema=modified)
+    # 不应再报 evidence 缺失
+    assert not any("evidence" in e for e in errs2)
+
+
+def test_schema_drives_enum():
+    """validator 的 enum 从 schema 读取，不是硬编码"""
+    schema = load_schema(reload=True)
+
+    # 构造一条 analysis.status = "RECORDED" 的合规记录
+    minimal = {
+        "record_id": "CAL-0001",
+        "product": {"name": "test", "sku": "X"},
+        "evidence": {"images": []},
+        "baseline": {"dimensions": None, "weight": None, "freight": None, "forwarder": None},
+        "actual": {"dimensions": None, "weight": None, "freight": None, "forwarder": None},
+        "feedback": {"user_note": "", "error_direction": "UNKNOWN", "error_type": "UNKNOWN"},
+        "analysis": {"status": "RECORDED", "possible_pattern": "", "physical_mechanism": "UNKNOWN"},
+        "provenance": {"created_at": "2026-01-01T00:00:00Z", "source_type": "SINGLE"},
+    }
+
+    # 原始 schema 通过
+    assert validate_record_v1(minimal, _schema=schema) == []
+
+    # 修改 schema：新增一个 status 值
+    modified = json.loads(json.dumps(schema))
+    modified["properties"]["analysis"]["properties"]["status"]["enum"].append("NEW_STATUS")
+    minimal["analysis"]["status"] = "NEW_STATUS"
+    # 应该通过（schema 允许了）
+    assert validate_record_v1(minimal, _schema=modified) == []
+
+    # 用原始 schema 则应失败
+    errs = validate_record_v1(minimal, _schema=schema)
+    assert any("status" in e for e in errs)
+
+
+def test_schema_drives_pattern():
+    """validator 的 record_id pattern 从 schema 读取，不是硬编码"""
+    schema = load_schema(reload=True)
+
+    minimal = {
+        "record_id": "CAL-0001",
+        "product": {"name": "test", "sku": "X"},
+        "evidence": {"images": []},
+        "baseline": {"dimensions": None, "weight": None, "freight": None, "forwarder": None},
+        "actual": {"dimensions": None, "weight": None, "freight": None, "forwarder": None},
+        "feedback": {"user_note": "", "error_direction": "UNKNOWN", "error_type": "UNKNOWN"},
+        "analysis": {"status": "RECORDED", "possible_pattern": "", "physical_mechanism": "UNKNOWN"},
+        "provenance": {"created_at": "2026-01-01T00:00:00Z", "source_type": "SINGLE"},
+    }
+    assert validate_record_v1(minimal, _schema=schema) == []
+
+    # 修改 schema pattern 为只接受 REC- 前缀
+    modified = json.loads(json.dumps(schema))
+    modified["properties"]["record_id"]["pattern"] = "^REC-\\d{4,}$"
+    minimal["record_id"] = "REC-0001"
+    assert validate_record_v1(minimal, _schema=modified) == []
+
+    # 原始 schema 应拒绝 REC- 前缀
+    errs = validate_record_v1(minimal, _schema=schema)
+    assert any("pattern" in e for e in errs)
+
+
+def test_extract_constraints_reads_all_enums():
+    """_extract_constraints 从 schema 正确提取所有 enum 集合"""
+    schema = load_schema(reload=True)
+    c = _extract_constraints(schema)
+
+    assert "RECORDED" in c["statuses"]
+    assert "SOFTWARE_ACTIVE" in c["statuses"]
+    assert "HIGH" in c["error_directions"]
+    assert "DIMENSION_HIGH" in c["error_types"]
+    assert "FULL_FLAT_FOLD" in c["mechanisms"]
+    assert "BATCH_JSON" in c["source_types"]
+    assert "A" in c["evidence_levels"]
+    assert "UNKNOWN" in c["evidence_levels"]
+    assert c["record_id_pattern"].match("CAL-0001")
+    assert not c["record_id_pattern"].match("REC-0001")
 
 
 if __name__ == "__main__":

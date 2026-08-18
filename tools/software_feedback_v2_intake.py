@@ -28,59 +28,102 @@ INDEX_PATH = PROJECT_ROOT / "data" / "software_import_index.json"
 RECORDS_PATH = PROJECT_ROOT / "data" / "calibration_records.jsonl"
 SCHEMA_PATH = PROJECT_ROOT / "schemas" / "calibration_record_v1.json"
 
-# ── Schema 约束（与 calibration_record_v1.json 完全对齐） ──
-
-_REQUIRED_TOP = {"record_id", "product", "evidence", "baseline", "actual", "feedback", "analysis", "provenance"}
-_ALLOWED_TOP = _REQUIRED_TOP  # additionalProperties: false
-_RECORD_ID_RE = re.compile(r"^CAL-\d{4,}$")
-_EVIDENCE_LEVELS = {"A", "B", "C", "D", "UNKNOWN"}
-_ERROR_DIRECTIONS = {"HIGH", "LOW", "MIXED", "UNKNOWN"}
-_ERROR_TYPES = {
-    "DIMENSION_HIGH", "DIMENSION_LOW", "WEIGHT_HIGH", "WEIGHT_LOW",
-    "PACKAGING_ASSUMPTION", "FOLDING_COMPRESSION", "STRUCTURE_MISREAD",
-    "QUANTITY_MISMATCH", "SKU_MISMATCH", "FREIGHT_MISMATCH", "FORWARDER_MISMATCH",
-    "DATA_CONFLICT", "UNKNOWN",
-}
-_STATUSES = {
-    "RECORDED", "PATTERN_CANDIDATE", "APPROVED_PENDING_PUBLICATION",
-    "EXPORTED_PENDING_ACTIVATION", "SOFTWARE_ACTIVE",
-}
-_MECHANISMS = {"FULL_FLAT_FOLD", "STRONG_COMPRESSION", "MODERATE_COMPRESSION", "SHAPE_RETAINED", "UNKNOWN"}
-_SOURCE_TYPES = {"SINGLE", "BATCH_CSV", "BATCH_EXCEL", "BATCH_JSON", "BATCH_JSONL", "BATCH_IMAGES", "UNKNOWN"}
-
-
 class IntakeError(Exception):
     """Intake 失败"""
 
 
-# ── Schema 校验 ──
+# ── Schema 驱动校验（schema 文件为唯一真实来源） ──
 
-def validate_record_v1(record: dict[str, Any]) -> list[str]:
+_schema_cache: dict[str, Any] | None = None
+
+
+def load_schema(*, reload: bool = False) -> dict[str, Any]:
+    """加载并缓存 schemas/calibration_record_v1.json。
+
+    reload=True 强制重新读取文件（测试用）。
+    """
+    global _schema_cache
+    if _schema_cache is None or reload:
+        if not SCHEMA_PATH.exists():
+            raise FileNotFoundError(f"Schema 文件不存在: {SCHEMA_PATH}")
+        with open(SCHEMA_PATH, encoding="utf-8") as f:
+            _schema_cache = json.load(f)
+    return _schema_cache
+
+
+def _extract_constraints(schema: dict[str, Any]) -> dict[str, Any]:
+    """从 schema JSON 提取校验所需的约束（不硬编码任何值）。"""
+    props = schema.get("properties", {})
+
+    # record_id pattern
+    rid_pattern = props.get("record_id", {}).get("pattern", r"^CAL-\d{4,}$")
+
+    # enum 提取
+    def _enum(path_parts: list[str]) -> set[str]:
+        node = props
+        for part in path_parts:
+            node = node.get(part, {}).get("properties", node) if part != path_parts[-1] else node.get(part, {})
+        # 最后一级取 enum
+        if isinstance(node, dict) and "enum" in node:
+            return set(node["enum"])
+        return set()
+
+    evidence_levels = set(props.get("evidence", {}).get("properties", {}).get("evidence_level", {}).get("enum", []))
+    fb_props = props.get("feedback", {}).get("properties", {})
+    error_dirs = set(fb_props.get("error_direction", {}).get("enum", []))
+    error_types = set(fb_props.get("error_type", {}).get("enum", []))
+    an_props = props.get("analysis", {}).get("properties", {})
+    statuses = set(an_props.get("status", {}).get("enum", []))
+    mechanisms = set(an_props.get("physical_mechanism", {}).get("enum", []))
+    pr_props = props.get("provenance", {}).get("properties", {})
+    source_types = set(pr_props.get("source_type", {}).get("enum", []))
+
+    return {
+        "required": set(schema.get("required", [])),
+        "allowed_top": set(props.keys()),  # additionalProperties: false
+        "additional_properties": schema.get("additionalProperties", True),
+        "record_id_pattern": re.compile(rid_pattern),
+        "evidence_levels": evidence_levels,
+        "error_directions": error_dirs,
+        "error_types": error_types,
+        "statuses": statuses,
+        "mechanisms": mechanisms,
+        "source_types": source_types,
+    }
+
+
+def validate_record_v1(record: dict[str, Any], *, _schema: dict[str, Any] | None = None) -> list[str]:
     """校验单条 record 是否严格符合 calibration_record_v1.json。
 
     返回 error 列表；空列表 = 通过。
-    只覆盖 schema 的结构性约束（required / additionalProperties / pattern / enum / type）。
+    约束全部从 schema 文件读取，不硬编码。
+    可传入 _schema 覆盖（测试用）。
     """
     errors: list[str] = []
 
     if not isinstance(record, dict):
         return ["record 不是 object"]
 
+    # 从 schema 提取约束
+    schema = _schema if _schema is not None else load_schema()
+    c = _extract_constraints(schema)
+
     # additionalProperties: false
-    extra = set(record.keys()) - _ALLOWED_TOP
-    if extra:
-        errors.append(f"禁止的顶层字段: {sorted(extra)}")
+    if c["additional_properties"] is False:
+        extra = set(record.keys()) - c["allowed_top"]
+        if extra:
+            errors.append(f"禁止的顶层字段: {sorted(extra)}")
 
     # required
-    missing = _REQUIRED_TOP - set(record.keys())
+    missing = c["required"] - set(record.keys())
     if missing:
         errors.append(f"缺少必填字段: {sorted(missing)}")
         return errors  # 缺必填字段时后续检查无意义
 
     # record_id pattern
     rid = record.get("record_id")
-    if not isinstance(rid, str) or not _RECORD_ID_RE.match(rid):
-        errors.append(f"record_id 不符合 CAL-XXXX 格式: {rid!r}")
+    if not isinstance(rid, str) or not c["record_id_pattern"].match(rid):
+        errors.append(f"record_id 不符合 schema pattern: {rid!r}")
 
     # product
     prod = record.get("product")
@@ -108,29 +151,29 @@ def validate_record_v1(record: dict[str, Any]) -> list[str]:
     # feedback enum
     fb = record.get("feedback")
     if isinstance(fb, dict):
-        if fb.get("error_direction") not in _ERROR_DIRECTIONS:
+        if c["error_directions"] and fb.get("error_direction") not in c["error_directions"]:
             errors.append(f"feedback.error_direction 非法: {fb.get('error_direction')!r}")
-        if fb.get("error_type") not in _ERROR_TYPES:
+        if c["error_types"] and fb.get("error_type") not in c["error_types"]:
             errors.append(f"feedback.error_type 非法: {fb.get('error_type')!r}")
 
     # analysis enum
     an = record.get("analysis")
     if isinstance(an, dict):
-        if an.get("status") not in _STATUSES:
+        if c["statuses"] and an.get("status") not in c["statuses"]:
             errors.append(f"analysis.status 非法: {an.get('status')!r}")
-        if an.get("physical_mechanism") not in _MECHANISMS:
+        if c["mechanisms"] and an.get("physical_mechanism") not in c["mechanisms"]:
             errors.append(f"analysis.physical_mechanism 非法: {an.get('physical_mechanism')!r}")
 
-    # evidence
+    # evidence enum
     ev = record.get("evidence")
     if isinstance(ev, dict):
-        if ev.get("evidence_level") is not None and ev.get("evidence_level") not in _EVIDENCE_LEVELS:
+        if c["evidence_levels"] and ev.get("evidence_level") is not None and ev.get("evidence_level") not in c["evidence_levels"]:
             errors.append(f"evidence.evidence_level 非法: {ev.get('evidence_level')!r}")
 
-    # provenance
+    # provenance enum
     pr = record.get("provenance")
     if isinstance(pr, dict):
-        if pr.get("source_type") is not None and pr.get("source_type") not in _SOURCE_TYPES:
+        if c["source_types"] and pr.get("source_type") is not None and pr.get("source_type") not in c["source_types"]:
             errors.append(f"provenance.source_type 非法: {pr.get('source_type')!r}")
 
     return errors
