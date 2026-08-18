@@ -8,6 +8,8 @@
 - 不修改 Profit-Accounting、其 Prompt、keyword_tool 或 product_collector。
 - 不把 Agent 推断写成事实；未知字符串为 `UNKNOWN`，未知数字为 `null`。
 - 不从实际费用反推唯一包装尺寸、重量或方式；不因单样本形成规则。
+- 货代、费率、实际费用确认为纯头程时，可计算"费率等价计费重量"，但该值只能作为派生/边界证据；没有独立真实重量/尺寸证据时，不能据此宣布实重或体积重主导；不能从单笔费用反推唯一 L×W×H、唯一包装重量或唯一包装方式。
+- AI baseline 不能作为证明自身正确的 truth。
 - 不自行生成正式规则包、ZIP、导入或激活规则；不自行声明 `VALIDATED` 或 `SOFTWARE_ACTIVE`。
 - `archive/legacy/` 和 CAL77 默认不读取，不进入 Clean Rules。
 - Agent 不自行实现 Replay Engine / Validator / Promotion / Formal Bundle Builder / 第二套 estimator；全部调用当前主软件官方工具。

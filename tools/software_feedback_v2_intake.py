@@ -10,24 +10,338 @@
 - 防止重复导入（通过 data/software_import_index.json）
 - suggested_package 与 actual_logistics 必须严格区分
 - 实际费用不能被反推成唯一包装尺寸
+- 每条写入前严格校验 schemas/calibration_record_v1.json
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 CONTRACT_VERSION = "Calibration Feedback Export V2"
-INDEX_PATH = Path(__file__).resolve().parent.parent / "data" / "software_import_index.json"
-RECORDS_PATH = Path(__file__).resolve().parent.parent / "data" / "calibration_records.jsonl"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+INDEX_PATH = PROJECT_ROOT / "data" / "software_import_index.json"
+RECORDS_PATH = PROJECT_ROOT / "data" / "calibration_records.jsonl"
+SCHEMA_PATH = PROJECT_ROOT / "schemas" / "calibration_record_v1.json"
+
+# ── Schema 约束（与 calibration_record_v1.json 完全对齐） ──
+
+_REQUIRED_TOP = {"record_id", "product", "evidence", "baseline", "actual", "feedback", "analysis", "provenance"}
+_ALLOWED_TOP = _REQUIRED_TOP  # additionalProperties: false
+_RECORD_ID_RE = re.compile(r"^CAL-\d{4,}$")
+_EVIDENCE_LEVELS = {"A", "B", "C", "D", "UNKNOWN"}
+_ERROR_DIRECTIONS = {"HIGH", "LOW", "MIXED", "UNKNOWN"}
+_ERROR_TYPES = {
+    "DIMENSION_HIGH", "DIMENSION_LOW", "WEIGHT_HIGH", "WEIGHT_LOW",
+    "PACKAGING_ASSUMPTION", "FOLDING_COMPRESSION", "STRUCTURE_MISREAD",
+    "QUANTITY_MISMATCH", "SKU_MISMATCH", "FREIGHT_MISMATCH", "FORWARDER_MISMATCH",
+    "DATA_CONFLICT", "UNKNOWN",
+}
+_STATUSES = {
+    "RECORDED", "PATTERN_CANDIDATE", "APPROVED_PENDING_PUBLICATION",
+    "EXPORTED_PENDING_ACTIVATION", "SOFTWARE_ACTIVE",
+}
+_MECHANISMS = {"FULL_FLAT_FOLD", "STRONG_COMPRESSION", "MODERATE_COMPRESSION", "SHAPE_RETAINED", "UNKNOWN"}
+_SOURCE_TYPES = {"SINGLE", "BATCH_CSV", "BATCH_EXCEL", "BATCH_JSON", "BATCH_JSONL", "BATCH_IMAGES", "UNKNOWN"}
 
 
 class IntakeError(Exception):
     """Intake 失败"""
 
+
+# ── Schema 校验 ──
+
+def validate_record_v1(record: dict[str, Any]) -> list[str]:
+    """校验单条 record 是否严格符合 calibration_record_v1.json。
+
+    返回 error 列表；空列表 = 通过。
+    只覆盖 schema 的结构性约束（required / additionalProperties / pattern / enum / type）。
+    """
+    errors: list[str] = []
+
+    if not isinstance(record, dict):
+        return ["record 不是 object"]
+
+    # additionalProperties: false
+    extra = set(record.keys()) - _ALLOWED_TOP
+    if extra:
+        errors.append(f"禁止的顶层字段: {sorted(extra)}")
+
+    # required
+    missing = _REQUIRED_TOP - set(record.keys())
+    if missing:
+        errors.append(f"缺少必填字段: {sorted(missing)}")
+        return errors  # 缺必填字段时后续检查无意义
+
+    # record_id pattern
+    rid = record.get("record_id")
+    if not isinstance(rid, str) or not _RECORD_ID_RE.match(rid):
+        errors.append(f"record_id 不符合 CAL-XXXX 格式: {rid!r}")
+
+    # product
+    prod = record.get("product")
+    if not isinstance(prod, dict):
+        errors.append("product 必须是 object")
+
+    # baseline 结构
+    bl = record.get("baseline")
+    if not isinstance(bl, dict):
+        errors.append("baseline 必须是 object")
+    else:
+        dims = bl.get("dimensions")
+        if dims is not None and not isinstance(dims, dict):
+            errors.append("baseline.dimensions 必须是 object 或 null")
+
+    # actual 结构
+    act = record.get("actual")
+    if not isinstance(act, dict):
+        errors.append("actual 必须是 object")
+    else:
+        dims = act.get("dimensions")
+        if dims is not None and not isinstance(dims, dict):
+            errors.append("actual.dimensions 必须是 object 或 null")
+
+    # feedback enum
+    fb = record.get("feedback")
+    if isinstance(fb, dict):
+        if fb.get("error_direction") not in _ERROR_DIRECTIONS:
+            errors.append(f"feedback.error_direction 非法: {fb.get('error_direction')!r}")
+        if fb.get("error_type") not in _ERROR_TYPES:
+            errors.append(f"feedback.error_type 非法: {fb.get('error_type')!r}")
+
+    # analysis enum
+    an = record.get("analysis")
+    if isinstance(an, dict):
+        if an.get("status") not in _STATUSES:
+            errors.append(f"analysis.status 非法: {an.get('status')!r}")
+        if an.get("physical_mechanism") not in _MECHANISMS:
+            errors.append(f"analysis.physical_mechanism 非法: {an.get('physical_mechanism')!r}")
+
+    # evidence
+    ev = record.get("evidence")
+    if isinstance(ev, dict):
+        if ev.get("evidence_level") is not None and ev.get("evidence_level") not in _EVIDENCE_LEVELS:
+            errors.append(f"evidence.evidence_level 非法: {ev.get('evidence_level')!r}")
+
+    # provenance
+    pr = record.get("provenance")
+    if isinstance(pr, dict):
+        if pr.get("source_type") is not None and pr.get("source_type") not in _SOURCE_TYPES:
+            errors.append(f"provenance.source_type 非法: {pr.get('source_type')!r}")
+
+    return errors
+
+
+# ── 去重索引 ──
+
+def load_index() -> dict[str, Any]:
+    """加载去重索引"""
+    if not INDEX_PATH.exists():
+        return {"records": {}}
+    with open(INDEX_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_index(index: dict[str, Any]) -> None:
+    """保存去重索引"""
+    with open(INDEX_PATH, "w", encoding="utf-8") as f:
+        json.dump(index, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def dedup_key(software_record_id: str, export_batch_id: str) -> str:
+    """去重键：同一 software record + 同一 batch = 重复；
+    同一 software record + 不同 batch = 允许。"""
+    return f"{software_record_id}@{export_batch_id}"
+
+
+# ── CAL-XXXX ID 生成 ──
+
+def next_cal_id() -> str:
+    """生成下一个 CAL-XXXX ID（基于现有 JSONL 中最大编号 +1）。"""
+    max_num = 0
+    if RECORDS_PATH.exists():
+        with open(RECORDS_PATH, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    rid = rec.get("record_id", "")
+                    if rid.startswith("CAL-"):
+                        num = int(rid.split("-", 1)[1])
+                        if num > max_num:
+                            max_num = num
+                except (json.JSONDecodeError, ValueError):
+                    pass
+    return f"CAL-{max_num + 1:04d}"
+
+
+# ── 字段映射 ──
+
+def extract_baseline(ai_initial: dict[str, Any]) -> dict[str, Any]:
+    """从 ai_initial 提取 baseline → schema 格式。
+
+    machine_facts.ai_initial.packaging_proposal.normal
+    → baseline.dimensions.{length,width,height}
+    → baseline.weight
+    → baseline.freight = null（V2 observation 无独立运费事实）
+    → baseline.forwarder = null
+    """
+    packaging_proposal = ai_initial.get("packaging_proposal") or {}
+    normal = packaging_proposal.get("normal") or {}
+
+    if not normal:
+        raise IntakeError("ai_initial.packaging_proposal.normal 不存在或为空")
+
+    def _num(v: Any) -> float | int | None:
+        if isinstance(v, (int, float)):
+            return v
+        return None
+
+    return {
+        "dimensions": {
+            "length": _num(normal.get("length_cm")),
+            "width": _num(normal.get("width_cm")),
+            "height": _num(normal.get("height_cm")),
+        },
+        "weight": _num(normal.get("weight_g")),
+        "freight": None,
+        "forwarder": None,
+    }
+
+
+def extract_actual(machine_facts: dict[str, Any]) -> dict[str, Any]:
+    """提取 actual（仅真实实测包装 truth）。
+
+    只从 machine_facts.user_feedback.actual_logistics.actual_package_* 映射。
+    suggested_package 绝不进入 actual。
+    """
+    user_feedback = machine_facts.get("user_feedback") or {}
+    actual = user_feedback.get("actual_logistics") or {}
+
+    def _num(v: Any) -> float | int | None:
+        if isinstance(v, (int, float)):
+            return v
+        return None
+
+    has_any = any(
+        actual.get(k) is not None
+        for k in ("actual_package_length_cm", "actual_package_width_cm",
+                   "actual_package_height_cm", "actual_package_weight_g",
+                   "actual_freight", "actual_forwarder")
+    )
+
+    if not has_any:
+        return {
+            "dimensions": None,
+            "weight": None,
+            "freight": None,
+            "forwarder": None,
+        }
+
+    has_dims = any(
+        actual.get(k) is not None
+        for k in ("actual_package_length_cm", "actual_package_width_cm", "actual_package_height_cm")
+    )
+
+    return {
+        "dimensions": {
+            "length": _num(actual.get("actual_package_length_cm")),
+            "width": _num(actual.get("actual_package_width_cm")),
+            "height": _num(actual.get("actual_package_height_cm")),
+        } if has_dims else None,
+        "weight": _num(actual.get("actual_package_weight_g")),
+        "freight": _num(actual.get("actual_freight")),
+        "forwarder": actual.get("actual_forwarder"),
+    }
+
+
+def extract_feedback(machine_facts: dict[str, Any]) -> dict[str, Any]:
+    """提取 feedback → schema 格式。
+
+    user_note: 来自 user_feedback.note 或 suggested_package.note
+    error_direction / error_type: 初始 UNKNOWN
+    """
+    user_feedback = machine_facts.get("user_feedback") or {}
+    note = user_feedback.get("note") or ""
+
+    # 如果 user_feedback.note 为空，尝试 suggested_package.note
+    if not note:
+        suggested = user_feedback.get("suggested_package") or {}
+        note = suggested.get("note") or ""
+
+    return {
+        "user_note": str(note) if note else "",
+        "error_direction": "UNKNOWN",
+        "error_type": "UNKNOWN",
+    }
+
+
+def build_calibration_record(
+    record: dict[str, Any],
+    export_batch_id: str,
+    cal_id: str,
+) -> dict[str, Any]:
+    """构建一条严格符合 calibration_record_v1.json 的记录。
+
+    不产生任何 schema 禁止的顶层字段。
+    """
+    machine_facts = record.get("machine_facts") or {}
+    ai_initial = machine_facts.get("ai_initial") or {}
+
+    # baseline 必须来自 ai_initial
+    baseline = extract_baseline(ai_initial)
+
+    # actual 只来自真实实测
+    actual = extract_actual(machine_facts)
+
+    # feedback
+    feedback = extract_feedback(machine_facts)
+
+    # 图片路径
+    image_paths = record.get("image_relative_paths") or []
+
+    # product
+    observation = ai_initial.get("observation") or {}
+    product_name = observation.get("product_name") or record.get("product_short_name") or "UNKNOWN"
+
+    # evidence.source 简洁标记来源
+    source_text = f"software_export_v2 (batch={export_batch_id})"
+
+    return {
+        "record_id": cal_id,
+        "product": {
+            "name": product_name,
+            "sku": "UNKNOWN",
+            "quantity": None,
+        },
+        "evidence": {
+            "images": list(image_paths),
+            "source": source_text,
+            "evidence_level": "UNKNOWN",
+        },
+        "baseline": baseline,
+        "actual": actual,
+        "feedback": feedback,
+        "analysis": {
+            "status": "RECORDED",
+            "possible_pattern": "",
+            "physical_mechanism": "UNKNOWN",
+        },
+        "provenance": {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "source_type": "BATCH_JSON",
+        },
+    }
+
+
+# ── Manifest 加载 ──
 
 def load_manifest(source: str | Path) -> dict[str, Any]:
     """加载 manifest.json"""
@@ -57,156 +371,7 @@ def load_manifest(source: str | Path) -> dict[str, Any]:
     return manifest
 
 
-def load_index() -> dict[str, Any]:
-    """加载去重索引"""
-    if not INDEX_PATH.exists():
-        return {"records": {}}
-    with open(INDEX_PATH, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_index(index: dict[str, Any]) -> None:
-    """保存去重索引"""
-    with open(INDEX_PATH, "w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
-
-
-def extract_baseline(ai_initial: dict[str, Any]) -> dict[str, Any]:
-    """从 ai_initial 提取 baseline（machine_facts.ai_initial.packaging_proposal.normal）"""
-    packaging_proposal = ai_initial.get("packaging_proposal") or {}
-    normal = packaging_proposal.get("normal") or {}
-
-    if not normal:
-        raise IntakeError("ai_initial.packaging_proposal.normal 不存在或为空")
-
-    # 提取关键字段
-    baseline = {
-        "length_cm": normal.get("length_cm"),
-        "width_cm": normal.get("width_cm"),
-        "height_cm": normal.get("height_cm"),
-        "weight_g": normal.get("weight_g"),
-        "packaging_state": normal.get("packaging_state"),
-        "packaging_method": normal.get("packaging_method"),
-        "confidence": normal.get("confidence"),
-    }
-
-    # 提取 observation 关键字段
-    observation = ai_initial.get("observation") or {}
-    baseline["product_name"] = observation.get("product_name")
-
-    return baseline
-
-
-def extract_user_feedback(machine_facts: dict[str, Any]) -> dict[str, Any]:
-    """提取用户反馈（suggested_package / actual_logistics）"""
-    user_feedback = machine_facts.get("user_feedback") or {}
-
-    # suggested_package（用户建议/校准值）
-    suggested = user_feedback.get("suggested_package") or {}
-    suggested_package = {
-        "length_cm": suggested.get("length_cm"),
-        "width_cm": suggested.get("width_cm"),
-        "height_cm": suggested.get("height_cm"),
-        "weight_g": suggested.get("weight_g"),
-        "note": suggested.get("note"),
-    } if suggested else None
-
-    # actual_logistics（真实实测包装 truth）
-    actual = user_feedback.get("actual_logistics") or {}
-    actual_logistics = {
-        "actual_package_length_cm": actual.get("actual_package_length_cm"),
-        "actual_package_width_cm": actual.get("actual_package_width_cm"),
-        "actual_package_height_cm": actual.get("actual_package_height_cm"),
-        "actual_package_weight_g": actual.get("actual_package_weight_g"),
-        "actual_freight": actual.get("actual_freight"),
-    } if actual else None
-
-    return {
-        "suggested_package": suggested_package,
-        "actual_logistics": actual_logistics,
-    }
-
-
-def extract_process_evidence(machine_facts: dict[str, Any]) -> dict[str, Any]:
-    """提取过程证据（local_adopted / reestimate_history）"""
-    local_adopted = machine_facts.get("local_adopted")
-    reestimate_history = machine_facts.get("reestimate_history") or []
-
-    return {
-        "local_adopted": local_adopted,
-        "reestimate_history_count": len(reestimate_history),
-    }
-
-
-def build_governance_summary(
-    record: dict[str, Any],
-    manifest_path: Path,
-    export_batch_id: str,
-) -> dict[str, Any]:
-    """构建治理摘要（写入 calibration_records.jsonl 的格式）"""
-    machine_facts = record.get("machine_facts") or {}
-    ai_initial = machine_facts.get("ai_initial") or {}
-
-    # baseline 必须来自 ai_initial
-    baseline = extract_baseline(ai_initial)
-
-    # 用户反馈
-    feedback = extract_user_feedback(machine_facts)
-
-    # 过程证据
-    process = extract_process_evidence(machine_facts)
-
-    # 图片路径
-    image_paths = record.get("image_relative_paths") or []
-
-    # 构建治理摘要
-    summary = {
-        "record_id": record.get("record_id"),
-        "sequence": record.get("sequence"),
-        "product_short_name": record.get("product_short_name"),
-        "product": {
-            "name": baseline.get("product_name") or record.get("product_short_name") or "UNKNOWN",
-            "sku": "UNKNOWN",
-        },
-        "source": "software_export_v2",
-        "baseline": {
-            "weight_g": baseline.get("weight_g"),
-            "package_size_cm": [
-                baseline.get("length_cm"),
-                baseline.get("width_cm"),
-                baseline.get("height_cm"),
-            ],
-            "packaging_state": baseline.get("packaging_state"),
-            "packaging_method": baseline.get("packaging_method"),
-            "confidence": baseline.get("confidence"),
-        },
-        "user_calibration": {
-            "suggested_package": feedback.get("suggested_package"),
-            "actual_logistics": feedback.get("actual_logistics"),
-            "note": None,  # 可从 user_feedback.note 提取
-        },
-        "analysis": {
-            "physical_mechanism": "UNKNOWN",
-            "error_direction": "UNKNOWN",
-            "error_type": "UNKNOWN",
-        },
-        "evidence": {
-            "images": image_paths,
-            "process_evidence": process,
-        },
-        "provenance": {
-            "source_manifest": str(manifest_path),
-            "export_batch_id": export_batch_id,
-            "software_record_id": record.get("record_id"),
-            "imported_at": datetime.now(timezone.utc).isoformat(),
-        },
-        "governance": {
-            "status": "RECORDED",
-        },
-    }
-
-    return summary
-
+# ── 主导入逻辑 ──
 
 def import_manifest(source: str | Path, dry_run: bool = False) -> dict[str, Any]:
     """导入 manifest
@@ -215,7 +380,7 @@ def import_manifest(source: str | Path, dry_run: bool = False) -> dict[str, Any]
         导入结果统计
     """
     manifest = load_manifest(source)
-    manifest_path = Path(source) if Path(source).is_dir() else Path(source).parent
+    manifest_path = str(Path(source) if Path(source).is_dir() else Path(source).parent)
     export_batch_id = manifest.get("export_batch_id", "UNKNOWN")
     records = manifest.get("records") or []
 
@@ -224,41 +389,55 @@ def import_manifest(source: str | Path, dry_run: bool = False) -> dict[str, Any]
 
     imported = 0
     skipped = 0
-    errors = []
+    schema_errors = []
+    other_errors = []
 
     for record in records:
         software_record_id = record.get("record_id")
         if not software_record_id:
-            errors.append(f"record 缺少 record_id")
+            other_errors.append("record 缺少 record_id")
             continue
 
-        # 检查去重
-        if software_record_id in index["records"]:
+        # 去重：同 software_record + 同 batch 跳过
+        dk = dedup_key(software_record_id, export_batch_id)
+        if dk in index["records"]:
             skipped += 1
             continue
 
         try:
-            # 构建治理摘要
-            summary = build_governance_summary(record, manifest_path, export_batch_id)
+            # 生成 CAL-XXXX ID
+            cal_id = next_cal_id() if not dry_run else f"CAL-9999"
+
+            # 构建符合 schema 的记录
+            cal_record = build_calibration_record(record, export_batch_id, cal_id)
+
+            # Schema 校验
+            errs = validate_record_v1(cal_record)
+            if errs:
+                schema_errors.append(f"{software_record_id}: {errs}")
+                continue  # 不写入 JSONL / index
 
             if not dry_run:
                 # 追加到 calibration_records.jsonl
                 with open(RECORDS_PATH, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(cal_record, ensure_ascii=False) + "\n")
 
                 # 更新去重索引
-                index["records"][software_record_id] = {
+                index["records"][dk] = {
                     "software_record_id": software_record_id,
                     "export_batch_id": export_batch_id,
-                    "local_calibration_record_id": summary["record_id"],
-                    "source_manifest": str(manifest_path),
-                    "imported_at": summary["provenance"]["imported_at"],
+                    "local_calibration_record_id": cal_id,
+                    "source_manifest": manifest_path,
+                    "imported_at": cal_record["provenance"]["created_at"],
                 }
+
+                # 递增 ID 计数器（内存中）
+                # next_cal_id 每次从文件读，已在写入后自动 +1
 
             imported += 1
 
         except IntakeError as e:
-            errors.append(f"{software_record_id}: {e}")
+            other_errors.append(f"{software_record_id}: {e}")
 
     # 保存去重索引
     if not dry_run and (imported > 0 or skipped > 0):
@@ -267,10 +446,13 @@ def import_manifest(source: str | Path, dry_run: bool = False) -> dict[str, Any]
     return {
         "imported": imported,
         "skipped": skipped,
-        "errors": errors,
+        "schema_errors": schema_errors,
+        "errors": other_errors,
         "dry_run": dry_run,
     }
 
+
+# ── CLI ──
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Software Feedback V2 Intake")
@@ -281,13 +463,18 @@ def main() -> int:
     try:
         result = import_manifest(args.source, dry_run=args.dry_run)
         print(f"导入完成: {result['imported']} 条, 跳过 {result['skipped']} 条")
+        if result["schema_errors"]:
+            print(f"Schema 错误: {len(result['schema_errors'])} 条")
+            for err in result["schema_errors"]:
+                print(f"  - {err}")
         if result["errors"]:
-            print(f"错误: {len(result['errors'])} 条")
+            print(f"其他错误: {len(result['errors'])} 条")
             for err in result["errors"]:
                 print(f"  - {err}")
         if result["dry_run"]:
             print("(dry-run 模式，未实际写入)")
-        return 0 if not result["errors"] else 1
+        has_errors = bool(result["schema_errors"] or result["errors"])
+        return 0 if not has_errors else 1
 
     except IntakeError as e:
         print(f"导入失败: {e}", file=sys.stderr)

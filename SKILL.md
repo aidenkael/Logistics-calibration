@@ -19,6 +19,9 @@ python tools/software_feedback_v2_intake.py --source "path/to/export_dir"
 - 防止重复导入（通过 `data/software_import_index.json`）
 - `suggested_package` 与 `actual_logistics` 必须严格区分
 - 实际费用不能被反推成唯一包装尺寸
+- 货代、费率、实际费用确认为纯头程时，可计算"费率等价计费重量"，但该值只能作为派生/边界证据；没有独立真实重量/尺寸证据时，不能据此宣布实重或体积重主导
+- 不能从单笔费用反推唯一 L×W×H、唯一包装重量或唯一包装方式
+- AI baseline 不能作为证明自身正确的 truth
 
 ### 备用入口：Direct Calibration
 
