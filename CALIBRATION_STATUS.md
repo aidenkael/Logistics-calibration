@@ -20,3 +20,4 @@
 - 2026-08-17 重算进一步支持：展示/支撑态≠运输态的 7 条明确异常样本实际/基线比值约 0.083–0.643，离散很大，因此继续禁止固定压缩倍率；小件包装 4 条 actual/baseline 约 1.60–3.33，方向稳定但无法区分实重/体积来源，继续 PATTERN_CANDIDATE。
 - 历史 83 条首次 AI baseline 继续冻结，不允许覆盖；后续新 Prompt 结果必须独立保存。费用派生分析可以继续追加，但不得把 AI baseline 的尺寸/重量当成 truth 自证。
 - 当前下一步：暂不重跑新 Prompt。只有获得实际包装后重量、商家可信重量、实际包装尺寸或货代称重/体积记录等独立证据时，再升级实重/体积重主导、总体积或尺寸范围判断。
+- **2026-08-18 软件 ↔ 校准 Agent 闭环最小桥接**：新建 `integration/software-calibration-v2` 分支。主入口改为 `tools/software_feedback_v2_intake.py`（读取 Calibration Feedback Export V2）；合同自检 `tools/check_software_contract.py`；去重索引 `data/software_import_index.json`。全部调用主软件官方工具（Validator / Offline Replay / Promotion / Bundle Builder），Agent 不自行实现发布链。83 条历史数据、145 张图片、费用反推结果、旧 candidate 全部 byte-level 冻结。
